@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Form One · Cast &amp; Render</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,200..700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /*
+    Palette (cold luxury, taken from the product itself):
+      Paper   #eae5dc  rgb(234,229,220)  footage backdrop
+      Ink     #16171a  rgb(22,23,26)     off-black type
+      Night   #141518  rgb(20,21,24)     backdrop once the footage turns dark
+      Bone    #ecebe5  rgb(236,234,229)  type on night
+      Copper  #b8652f                    the one accent (from the driver's voice coil), dots only
+    The --bg / --ink triplets are rewritten by JS as the footage goes dark, so every surface follows it.
+
+    z-index scale: stage 0 · callouts 15 · beats 20 · chrome/hud 40 · meter 50 · boot 90
+  */
+  :root{
+    --bg:234,229,220;
+    --ink:22,23,26;
+    --accent:#b8652f;
+    --ease:cubic-bezier(.22,.61,.36,1);
+    --gutter:clamp(18px, 3.4vw, 48px);
+    --top:max(88px, calc(env(safe-area-inset-top, 0px) + 76px));
+    --bottom:max(78px, calc(env(safe-area-inset-bottom, 0px) + 64px));
+    --display:'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+    --mono:'Geist Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  }
+
+  *,*::before,*::after{ box-sizing:border-box; margin:0; padding:0; }
+  html{ -webkit-text-size-adjust:100%; scrollbar-width:thin; scrollbar-color:rgba(var(--ink),.32) transparent; }
+  body{
+    background:rgb(var(--bg));
+    color:rgb(var(--ink));
+    font-family:var(--display);
+    font-weight:400;
+    -webkit-font-smoothing:antialiased;
+    -moz-osx-font-smoothing:grayscale;
+    overflow-x:hidden;
+  }
+  ::selection{ background:var(--accent); color:#f4f1ec; }
+  ::-webkit-scrollbar{ width:8px; }
+  ::-webkit-scrollbar-thumb{ background:rgba(var(--ink),.28); border-radius:8px; }
+  a:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
+
+  /* ---------- Preloader ---------- */
+  .boot{
+    position:fixed; inset:0; z-index:90;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px;
+    background:rgb(234,229,220);
+    transition:opacity .8s var(--ease), visibility .8s;
+  }
+  .boot.done{ opacity:0; visibility:hidden; }
+  .boot p{ font:400 11.5px/1 var(--mono); letter-spacing:.08em; color:rgba(22,23,26,.5); }
+  .bar{ width:150px; height:1px; background:rgba(22,23,26,.16); overflow:hidden; }
+  .bar i{ display:block; height:100%; width:100%; background:#16171a; transform:scaleX(0); transform-origin:0 50%; }
+
+  /* ---------- Fixed footage layer ---------- */
+  .stage{ position:fixed; inset:0; z-index:0; overflow:hidden; background:rgb(var(--bg)); }
+  .stage canvas{ position:absolute; inset:0; width:100%; height:100%; filter:contrast(1.02); }
+  .veil, .veil-dark{ position:absolute; inset:0; pointer-events:none; }
+  .veil{
+    background:
+      linear-gradient(to bottom, rgba(234,229,220,.62) 0%, rgba(234,229,220,.08) 20%, rgba(234,229,220,.08) 74%, rgba(234,229,220,.7) 100%),
+      radial-gradient(110% 85% at 50% 46%, rgba(234,229,220,0) 0%, rgba(234,229,220,.30) 100%);
+  }
+  .veil-dark{
+    opacity:0;
+    background:
+      linear-gradient(to bottom, rgba(20,21,24,.66) 0%, rgba(20,21,24,.06) 22%, rgba(20,21,24,.10) 62%, rgba(20,21,24,.80) 100%),
+      radial-gradient(110% 85% at 50% 46%, rgba(20,21,24,0) 0%, rgba(20,21,24,.36) 100%);
+  }
+  .grain{
+    position:absolute; inset:-50%; opacity:.12; mix-blend-mode:multiply; pointer-events:none;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/></filter><rect width='140' height='140' filter='url(%23n)' opacity='.5'/></svg>");
+  }
+
+  /* ---------- Chrome ---------- */
+  .chrome{
+    position:fixed; left:0; right:0; top:0; z-index:40;
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding:max(14px, calc(env(safe-area-inset-top, 0px) + 12px)) var(--gutter) 14px;
+    background:linear-gradient(to bottom, rgba(var(--bg),.92) 0%, rgba(var(--bg),.7) 70%, rgba(var(--bg),0) 100%);
+  }
+  .mark{
+    display:flex; align-items:center; gap:9px; min-width:0;
+    font-size:15px; font-weight:500; letter-spacing:-.01em; color:rgb(var(--ink));
+  }
+  .mark-star{ color:var(--accent); }
+  .nav{ display:flex; align-items:center; gap:clamp(14px, 2.4vw, 32px); flex-shrink:0; }
+  .nav a:not(.pill){
+    color:rgb(var(--ink)); text-decoration:none; font-size:14.5px; letter-spacing:-.005em;
+    opacity:.78; transition:opacity .3s var(--ease);
+  }
+  .pill{
+    display:inline-flex; align-items:center; justify-content:center;
+    height:40px; padding:0 21px; border-radius:999px;
+    background:rgb(var(--ink)); color:rgb(var(--bg)); -webkit-text-fill-color:rgb(var(--bg));
+    font-family:var(--display); font-size:14.5px; font-weight:500; letter-spacing:-.005em;
+    text-decoration:none; white-space:nowrap;
+    border:1px solid rgba(var(--ink),.14);
+    transition:transform .4s var(--ease);
+  }
+  @media (hover:hover) and (pointer:fine){
+    .nav a:not(.pill):hover{ opacity:1; }
+    .pill:hover{ transform:translateY(-2px); }
+  }
+
+  /* ---------- Chapter HUD + progress hairline ---------- */
+  .hud{
+    position:fixed; left:0; right:0; bottom:0; z-index:40; pointer-events:none;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:18px var(--gutter) max(16px, calc(env(safe-area-inset-bottom, 0px) + 12px));
+    font:400 11.5px/1 var(--mono); letter-spacing:.06em; color:rgba(var(--ink),.6);
+    background:linear-gradient(to top, rgba(var(--bg),.85) 0%, rgba(var(--bg),0) 100%);
+  }
+  .hud b{ font-weight:500; color:rgb(var(--ink)); }
+  .hud .cue{ transition:opacity .5s var(--ease); }
+  .meter{
+    position:fixed; top:0; left:0; z-index:50; height:2px; width:100%;
+    transform:scaleX(0); transform-origin:0 50%;
+    background:rgb(var(--ink)); opacity:.5;
+  }
+
+  /* ---------- Callouts (anchored to the footage by JS) ---------- */
+  .callouts{ position:fixed; inset:0; z-index:15; pointer-events:none; }
+  .co, .co > *{ position:absolute; left:0; top:0; }
+  .co > *{ opacity:0; will-change:transform,opacity; }
+  .co .dot{
+    width:9px; height:9px; border-radius:50%;
+    background:var(--accent); box-shadow:0 0 0 4px rgba(184,101,47,.2);
+  }
+  .co .ln{ background:rgba(var(--ink),.55); width:1px; height:1px; }
+  .co .lab{
+    white-space:nowrap;
+    font:500 11.5px/1 var(--mono); letter-spacing:.02em; color:rgb(var(--ink));
+    padding:7px 10px; border-radius:4px;
+    background:rgba(var(--bg),.74); border:1px solid rgba(var(--ink),.12);
+    -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
+  }
+
+  /* ---------- Story beats ---------- */
+  .beats{ position:fixed; inset:0; z-index:20; pointer-events:none; }
+  .beat{
+    position:absolute; inset:0; display:flex;
+    padding:var(--top) var(--gutter) var(--bottom);
+    opacity:0; will-change:opacity;
+  }
+  .p-bl{ align-items:flex-end;  justify-content:flex-start; }
+  .p-br{ align-items:flex-end;  justify-content:flex-end; }
+  .p-l { align-items:center;    justify-content:flex-start; }
+  .p-r { align-items:center;    justify-content:flex-end; }
+  .p-c { align-items:flex-end;  justify-content:center; text-align:center; }
+  .bi{ position:relative; isolation:isolate; max-width:min(30rem, 100%); will-change:transform; }
+  .bi.narrow{ max-width:min(24rem, 100%); }
+  /* soft local scrim so the type never sits on a raw frame */
+  .bi::before{
+    content:""; position:absolute; inset:-22% -26%; z-index:-1; pointer-events:none;
+    background:radial-gradient(closest-side, rgba(var(--bg),.66), rgba(var(--bg),0));
+  }
+  .p-c .bi{ display:flex; flex-direction:column; align-items:center; }
+
+  .hd{
+    font-family:var(--display);
+    font-weight:300; font-stretch:82%;
+    font-size:clamp(38px, 5.4vw, 88px);
+    line-height:.95; letter-spacing:-.04em;
+    max-width:12ch;
+  }
+  .hd b{ font-weight:600; }
+  .hero .hd{ font-size:clamp(64px, 9vw, 96px); font-stretch:78%; line-height:.9; }
+  .wm{ display:inline-block; overflow:hidden; vertical-align:top; padding-bottom:.1em; margin-bottom:-.1em; }
+  .w{ display:inline-block; will-change:transform; }
+
+  .sub{
+    margin-top:clamp(14px, 1.6vw, 22px);
+    font-size:clamp(15px, 1.1vw, 18px); line-height:1.5; letter-spacing:-.005em;
+    color:rgba(var(--ink),.7); max-width:34ch; text-wrap:pretty;
+  }
+  .cta{ margin-top:clamp(22px, 2.6vw, 34px); display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
+  .cta .pill{ height:48px; padding:0 26px; font-size:15px; }
+  .hint{ font:400 11.5px/1 var(--mono); letter-spacing:.06em; color:rgba(var(--ink),.55); }
+  .sub, .cta{ will-change:transform,opacity; }
+
+  .track{ position:relative; z-index:1; }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width:720px){
+    .nav a:not(.pill){ display:none; }
+    .mark{ font-size:14px; }
+    .nav .pill{ height:38px; padding:0 16px; font-size:13.5px; }
+    .hud{ font-size:10.5px; }
+    .co .lab{ font-size:10px; padding:5px 7px; }
+  }
+  /* Portrait: the footage becomes a centred band and copy sits in the paper above / below it */
+  @media (max-aspect-ratio:9/10){
+    .p-l, .p-r{ align-items:flex-start; justify-content:flex-start; }
+    .p-bl, .p-br{ justify-content:flex-start; }
+    .hd{ font-size:clamp(30px, 8.6vw, 46px); max-width:13ch; }
+    .hero .hd{ font-size:clamp(52px, 15vw, 76px); }
+    .sub{ font-size:14.5px; max-width:36ch; }
+    .bi, .bi.narrow{ max-width:100%; }
+  }
+  @media (max-width:420px){
+    .mark-star{ display:none; }
+    .nav .pill{ height:36px; padding:0 14px; font-size:13px; }
+    .cta .pill{ height:44px; padding:0 20px; font-size:14px; }
+  }
+  @media (max-height:520px) and (orientation:landscape){
+    :root{ --top:64px; --bottom:52px; }
+    .hd{ font-size:clamp(26px, 7.5vh, 40px); }
+    .hero .hd{ font-size:clamp(40px, 12vh, 60px); }
+    .sub{ margin-top:10px; font-size:13.5px; }
+    .cta{ margin-top:14px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="boot" id="boot">
+  <div class="bar"><i id="bootBar"></i></div>
+  <p id="bootPct">LOADING 0%</p>
+</div>
+
+<div class="stage">
+  <canvas id="clip" aria-hidden="true"></canvas>
+  <div class="veil" id="veil"></div>
+  <div class="veil-dark" id="veilDark"></div>
+  <div class="grain"></div>
+</div>
+
+<i class="meter" id="meter"></i>
+
+<header class="chrome">
+  <div class="mark"><span class="mark-star" aria-hidden="true">&#10037;</span>Cast &amp; Render</div>
+  <nav class="nav">
+    <a href="#comfort" data-jump="pad">Comfort</a>
+    <a href="#inside" data-jump="explode">Inside</a>
+    <a class="pill" href="#reserve" data-jump="end">Reserve</a>
+  </nav>
+</header>
+
+<div class="callouts" id="callouts" aria-hidden="true"></div>
+
+<main class="beats">
+  <!-- 0 · hero -->
+  <section class="beat p-bl hero" data-beat data-fx="rise">
+    <div class="bi">
+      <h1 class="hd">Form <b>One</b></h1>
+      <p class="sub">Over-ear headphones built around one idea: you should forget you're wearing them.</p>
+      <div class="cta"><a class="pill" href="#reserve" data-jump="end">Reserve yours</a><span class="hint">SCROLL TO EXPLORE</span></div>
+    </div>
+  </section>
+
+  <!-- 1 · after the reveal -->
+  <section class="beat p-br" data-beat data-fx="push">
+    <div class="bi narrow">
+      <h2 class="hd">Comfort starts <b>where it touches you.</b></h2>
+      <p class="sub">So that's where we started too.</p>
+    </div>
+  </section>
+
+  <!-- 2 · headband pad hold -->
+  <section class="beat p-bl" data-beat data-fx="rise" id="comfort">
+    <div class="bi">
+      <h2 class="hd">A crown of <b>soft cotton.</b></h2>
+      <p class="sub">The headband canopy is a breathable cotton-blend weave over a pressure-spreading foam core. Weight settles across your head instead of pressing on one spot.</p>
+    </div>
+  </section>
+
+  <!-- 3 · ear cushion hold -->
+  <section class="beat p-br" data-beat data-fx="rise">
+    <div class="bi narrow">
+      <h2 class="hd">Cushions that give, <b>then hold.</b></h2>
+      <p class="sub">Slow-recovery memory foam in a soft protein-leather wrap. It seals out the room without squeezing.</p>
+    </div>
+  </section>
+
+  <!-- 4 · lead-in to the explosion (words part as it comes apart) -->
+  <section class="beat p-r" data-beat data-fx="part">
+    <div class="bi narrow">
+      <h2 class="hd">Then we <b>took it apart.</b></h2>
+      <p class="sub">To show you what holds it together.</p>
+    </div>
+  </section>
+
+  <!-- 5 · exploded hold -->
+  <section class="beat p-bl" data-beat data-fx="rise" id="inside">
+    <div class="bi narrow">
+      <h2 class="hd">Every part, <b>in its place.</b></h2>
+      <p class="sub">Driver, battery, logic board and aluminium cup, arranged so the weight sits evenly over both ears.</p>
+    </div>
+  </section>
+
+  <!-- 6 · reassembly (words converge as it closes up) -->
+  <section class="beat p-br" data-beat data-fx="join">
+    <div class="bi narrow">
+      <h2 class="hd">One piece <b>again.</b></h2>
+      <p class="sub">No gaps, no rattles, nothing loose.</p>
+    </div>
+  </section>
+
+  <!-- 7 · the dark turn -->
+  <section class="beat p-l" data-beat data-fx="rise">
+    <div class="bi narrow">
+      <h2 class="hd">Also in <b>Graphite.</b></h2>
+      <p class="sub">The same build in a darker finish.</p>
+    </div>
+  </section>
+
+  <!-- 8 · resting, final call -->
+  <section class="beat p-c" data-beat data-fx="rise" id="reserve">
+    <div class="bi">
+      <h2 class="hd">Form <b>One</b></h2>
+      <p class="sub">Silver or Graphite. Reserve yours today.</p>
+      <div class="cta"><a class="pill" href="#reserve" data-jump="end">Reserve Form One</a></div>
+    </div>
+  </section>
+</main>
+
+<footer class="hud">
+  <span id="chapter"><b>01</b> / 06 &nbsp;Form</span>
+  <span class="cue" id="cue">SCROLL</span>
+</footer>
+
+<div class="track" id="track"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ------------------------------------------------------------------
+     Footage: four clips extracted with ffmpeg at their native 24fps into one
+     continuous WebP sequence (frames/f0001.webp … f0879.webp, 1600x900).
+       clip 1  reveal         idx   0–239
+       clip 2  comfort pass   idx 240–479
+       clip 3  explode        idx 480–638  (cut at 6s + 15 frames, before it lies down)
+       clip 4  beads / dark   idx 639–878
+     Every frame is a standalone image, so the scrub lands on any frame instantly.
+  ------------------------------------------------------------------ */
+  var FRAME_COUNT = 879, IW = 1600, IH = 900;
+  function frameSrc(i){ return "frames/f" + String(i + 1).padStart(4, "0") + ".webp"; }
+
+  var reduce = !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+
+  /* ---------- Helpers ---------- */
+  function clamp(v, a, b){ return Math.min(Math.max(v, a), b); }
+  function smooth(t){ return t * t * (3 - 2 * t); }
+  function ramp(p, a, b){
+    if (b <= a) return p >= b ? 1 : 0;
+    return smooth(clamp((p - a) / (b - a), 0, 1));
+  }
+  function ease(t, e){
+    if (e === "in")    return 1 - Math.cos(t * Math.PI / 2);
+    if (e === "out")   return Math.sin(t * Math.PI / 2);
+    if (e === "inout") return smooth(t);
+    return t;
+  }
+
+  /* ------------------------------------------------------------------
+     Timeline, in scroll units (1 unit = 1vh of scrolling).
+     "play" segments scrub frames; "hold" segments freeze on one frame so the copy
+     has time to land, with a slow push-in (and back out) so it never feels dead.
+     Eases are chosen so frame speed is continuous where two plays meet, and comes
+     to rest where a play meets a hold.
+  ------------------------------------------------------------------ */
+  var SEGS = [
+    { hold:0,   len:50 },
+    { from:0,   to:239, len:240, ease:"linear" },
+    { from:239, to:308, len:110, ease:"out" },
+    { hold:308, len:170, name:"pad",     focus:[0.50, 0.30] },
+    { from:308, to:400, len:110, ease:"inout" },
+    { hold:400, len:190, name:"cushion", focus:[0.50, 0.52] },
+    { from:400, to:576, len:210, ease:"inout" },
+    { hold:576, len:180, name:"explode", focus:[0.50, 0.45] },
+    { from:576, to:700, len:190, ease:"in" },
+    { from:700, to:878, len:280, ease:"out" },
+    { hold:878, len:90,  name:"end" }
+  ];
+  var TOTAL = 0;
+  SEGS.forEach(function(s){ s.start = TOTAL; TOTAL += s.len; s.end = TOTAL; });
+  var HOLD_ZOOM = 0.03;
+
+  function seg(name){ for (var i = 0; i < SEGS.length; i++) if (SEGS[i].name === name) return SEGS[i]; }
+
+  var view = { frame:0, zoom:1, fx:0.5, fy:0.5 };
+  function sample(pos){
+    var s = SEGS[SEGS.length - 1];
+    for (var i = 0; i < SEGS.length; i++){ if (pos < SEGS[i].end){ s = SEGS[i]; break; } }
+    var t = clamp((pos - s.start) / s.len, 0, 1);
+    if (s.hold !== undefined){
+      view.frame = s.hold;
+      view.zoom = (s.focus && !reduce) ? 1 + HOLD_ZOOM * Math.sin(Math.PI * t) : 1;
+      view.fx = s.focus ? s.focus[0] : 0.5;
+      view.fy = s.focus ? s.focus[1] : 0.5;
+    } else {
+      view.frame = s.from + (s.to - s.from) * ease(t, s.ease);
+      view.zoom = 1; view.fx = 0.5; view.fy = 0.5;
+    }
+  }
+
+  // Scroll position at which a given frame is on screen (first play segment containing it).
+  function P(f){
+    for (var i = 0; i < SEGS.length; i++){
+      var s = SEGS[i];
+      if (s.hold !== undefined || f < s.from || f > s.to) continue;
+      var target = (f - s.from) / (s.to - s.from), lo = 0, hi = 1;
+      for (var k = 0; k < 30; k++){ var mid = (lo + hi) / 2; if (ease(mid, s.ease) < target) lo = mid; else hi = mid; }
+      return s.start + s.len * lo;
+    }
+    return 0;
+  }
+
+  /* ------------------------------------------------------------------
+     Beats: [a, b] is the scroll band a beat owns; it eases in over R and out over R.
+     Gaps between one beat's b and the next beat's a are deliberate dead zones,
+     footage only, so two beats are never readable at once.
+  ------------------------------------------------------------------ */
+  var R = 18;
+  var pad = seg("pad"), cushion = seg("cushion"), explode = seg("explode");
+  var BEAT_SPEC = [
+    { a:0,                 b:P(40),  first:true },
+    { a:P(205),            b:P(300) },
+    { a:pad.start + 6,     b:pad.end - 6,     co:"pad" },
+    { a:cushion.start + 6, b:cushion.end - 6, co:"cushion" },
+    { a:P(428),            b:P(548) },
+    { a:explode.start + 6, b:explode.end - 6, co:"explode" },
+    { a:P(600),            b:P(690) },
+    { a:P(750),            b:P(838) },
+    { a:P(848),            b:Infinity, last:true }
+  ];
+
+  /* Callouts, anchored in normalised frame coordinates (0..1 of the 1600x900 frame).
+     dir = which way the leader line runs from the dot; len = fraction of the frame. */
+  var CALLOUTS = {
+    pad: [
+      { x:0.42,  y:0.355, dir:"D", len:0.17, t:"Breathable cotton-blend weave" },
+      { x:0.80,  y:0.42,  dir:"D", len:0.13, t:"Pressure-spreading foam core" }
+    ],
+    cushion: [
+      { x:0.26,  y:0.16,  dir:"R", len:0.05, t:"Slow-recovery memory foam" },
+      { x:0.07,  y:0.30,  dir:"R", len:0.04, t:"Aluminium shell" },
+      { x:0.555, y:0.50,  dir:"R", len:0.06, t:"Dynamic driver" },
+      { x:0.86,  y:0.60,  dir:"L", len:0.05, t:"Protein-leather wrap" }
+    ],
+    explode: [
+      { x:0.41,  y:0.355, dir:"R", len:0.035, t:"Dynamic driver" },
+      { x:0.625, y:0.135, dir:"R", len:0.04,  t:"Stainless headband rail" },
+      { x:0.375, y:0.585, dir:"U", len:0.09,  t:"Battery cell" },
+      { x:0.625, y:0.56,  dir:"D", len:0.26,  t:"Logic board" },
+      { x:0.85,  y:0.70,  dir:"D", len:0.10,  t:"Aluminium cup" }
+    ]
+  };
+
+  var CHAPTERS = [
+    [0, "Form"], [SEGS[2].start, "Comfort"], [SEGS[4].start, "Fit"],
+    [SEGS[6].start, "Inside"], [SEGS[8].start, "Finish"], [P(848) - 10, "Reserve"]
+  ];
+
+  /* ---------- Refs ---------- */
+  var canvas   = document.getElementById("clip");
+  var ctx      = canvas.getContext("2d");
+  var boot     = document.getElementById("boot");
+  var bootBar  = document.getElementById("bootBar");
+  var bootPct  = document.getElementById("bootPct");
+  var meter    = document.getElementById("meter");
+  var veil     = document.getElementById("veil");
+  var veilDark = document.getElementById("veilDark");
+  var chapter  = document.getElementById("chapter");
+  var cue      = document.getElementById("cue");
+  var track    = document.getElementById("track");
+  var layer    = document.getElementById("callouts");
+  var root     = document.documentElement;
+
+  // Tiny offscreen canvas: averages the frame's edge colours to fill the portrait bands.
+  var small = document.createElement("canvas"); small.width = 32; small.height = 18;
+  var sctx = small.getContext("2d");
+
+  track.style.height = (TOTAL + 100) + "vh";
+
+  /* ---------- Build beats (split headlines into masked words) ---------- */
+  function splitWords(el){
+    var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null), nodes = [], n;
+    while ((n = walker.nextNode())) nodes.push(n);
+    nodes.forEach(function(node){
+      var frag = document.createDocumentFragment();
+      node.nodeValue.split(/(\s+)/).forEach(function(part){
+        if (!part) return;
+        if (/^\s+$/.test(part)){ frag.appendChild(document.createTextNode(" ")); return; }
+        var m = document.createElement("span"); m.className = "wm";
+        var w = document.createElement("span"); w.className = "w"; w.textContent = part;
+        m.appendChild(w); frag.appendChild(m);
+      });
+      node.parentNode.replaceChild(frag, node);
+    });
+  }
+
+  var beats = [].slice.call(document.querySelectorAll("[data-beat]")).map(function(el, i){
+    var hd = el.querySelector(".hd");
+    splitWords(hd);
+    var spec = BEAT_SPEC[i];
+    return {
+      el:el, bi:el.querySelector(".bi"), fx:el.getAttribute("data-fx"),
+      masks:[].slice.call(hd.querySelectorAll(".wm")),
+      words:[].slice.call(hd.querySelectorAll(".w")),
+      rest:[].slice.call(el.querySelectorAll(".sub, .cta")),
+      a:spec.a, b:spec.b, first:!!spec.first, last:!!spec.last, co:spec.co,
+      o:-1, e:-1, l:-1, live:!!el.querySelector("a")
+    };
+  });
+
+  /* ---------- Build callouts ---------- */
+  var callouts = [];
+  beats.forEach(function(B, bi){
+    if (!B.co) return;
+    CALLOUTS[B.co].forEach(function(c, j){
+      var g = document.createElement("div"); g.className = "co";
+      var dot = document.createElement("i"); dot.className = "dot";
+      var ln = document.createElement("i"); ln.className = "ln";
+      var lab = document.createElement("span"); lab.className = "lab"; lab.textContent = c.t;
+      g.appendChild(ln); g.appendChild(dot); g.appendChild(lab); layer.appendChild(g);
+      ln.style.transformOrigin = c.dir === "R" ? "0 50%" : c.dir === "L" ? "100% 50%" : c.dir === "D" ? "50% 0" : "50% 100%";
+      callouts.push({ beat:bi, j:j, x:c.x, y:c.y, dir:c.dir, len:c.len, dot:dot, ln:ln, lab:lab, w:0, h:0, L:0, on:false });
+    });
+  });
+
+  /* ---------- Layout ---------- */
+  var cw = 0, ch = 0, dpr = 1, S = 1, ox = 0, oy = 0, topSafe = 80, sizeVer = 0;
+
+  function layout(){
+    cw = window.innerWidth; ch = window.innerHeight;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(cw * dpr); canvas.height = Math.round(ch * dpr);
+    // Landscape: cover. Portrait: show the central ~72% of the frame width as a band.
+    S = (cw / ch < 0.9) ? cw / (IW * 0.72) : Math.max(cw / IW, ch / IH);
+    ox = (cw - IW * S) / 2; oy = (ch - IH * S) / 2;
+    topSafe = cw <= 720 ? 70 : 84;
+    callouts.forEach(function(c){
+      c.w = c.lab.offsetWidth; c.h = c.lab.offsetHeight;
+      c.L = Math.max(22, (c.dir === "R" || c.dir === "L" ? IW : IH) * S * c.len);
+      if (c.dir === "R" || c.dir === "L"){ c.ln.style.width = c.L + "px"; c.ln.style.height = "1px"; }
+      else { c.ln.style.height = c.L + "px"; c.ln.style.width = "1px"; }
+    });
+    sizeVer++;
+  }
+
+  // Frame-space point -> screen point, including the hold push-in.
+  var pt = { x:0, y:0 };
+  function mapPt(nx, ny){
+    var fx = ox + view.fx * IW * S, fy = oy + view.fy * IH * S;
+    pt.x = fx + (ox + nx * IW * S - fx) * view.zoom;
+    pt.y = fy + (oy + ny * IH * S - fy) * view.zoom;
+    return pt;
+  }
+
+  /* ---------- Frames ---------- */
+  var frames = new Array(FRAME_COUNT), loaded = new Uint8Array(FRAME_COUNT), drawnKey = "";
+
+  function nearestLoaded(i){
+    if (loaded[i]) return i;
+    for (var d = 1; d < FRAME_COUNT; d++){
+      if (i - d >= 0 && loaded[i - d]) return i - d;
+      if (i + d < FRAME_COUNT && loaded[i + d]) return i + d;
+    }
+    return -1;
+  }
+
+  function draw(){
+    var i = nearestLoaded(clamp(Math.round(view.frame), 0, FRAME_COUNT - 1));
+    if (i < 0) return;
+    var key = i + "|" + view.zoom.toFixed(4) + "|" + sizeVer;
+    if (key === drawnKey) return;
+    drawnKey = key;
+    var img = frames[i];
+    var fx = ox + view.fx * IW * S, fy = oy + view.fy * IH * S;
+    var dx = (fx + (ox - fx) * view.zoom) * dpr, dy = (fy + (oy - fy) * view.zoom) * dpr;
+    var dw = IW * S * view.zoom * dpr, dh = IH * S * view.zoom * dpr;
+    var W = canvas.width, H = canvas.height;
+    if (dy > 0){ // portrait bands: stretch the averaged top / bottom edge rows
+      sctx.drawImage(img, 0, 0, 32, 18);
+      ctx.drawImage(small, 0, 0, 32, 1, 0, 0, W, Math.ceil(dy) + 1);
+      ctx.drawImage(small, 0, 17, 32, 1, 0, Math.floor(dy + dh) - 1, W, H - dy - dh + 2);
+    }
+    ctx.drawImage(img, dx, dy, dw, dh);
+  }
+
+  /* ---------- Theme follows the footage into the dark ---------- */
+  var BG_L = [234,229,220], BG_D = [20,21,24], INK_L = [22,23,26], INK_D = [236,234,229], lastD = -1;
+  function mix(a, b, t){ return Math.round(a[0] + (b[0] - a[0]) * t) + "," + Math.round(a[1] + (b[1] - a[1]) * t) + "," + Math.round(a[2] + (b[2] - a[2]) * t); }
+  function theme(){
+    var d = ramp(view.frame, 738, 756);
+    if (Math.abs(d - lastD) < 0.002 && !(d === 0 && lastD !== 0) && !(d === 1 && lastD !== 1)) return;
+    lastD = d;
+    root.style.setProperty("--bg", mix(BG_L, BG_D, d));
+    root.style.setProperty("--ink", mix(INK_L, INK_D, d));
+    veil.style.opacity = 1 - d;
+    veilDark.style.opacity = d;
+  }
+
+  /* ---------- Beats ---------- */
+  var DRIFT = 22, introK = 0;
+
+  function beatTransforms(B, e, l){
+    var n = B.words.length, st = Math.min(0.08, 0.5 / Math.max(1, n - 1)), span = 1 - (n - 1) * st;
+    for (var i = 0; i < n; i++){
+      var ei = smooth(clamp((e - i * st) / span, 0, 1));
+      var c = n > 1 ? (i - (n - 1) / 2) / ((n - 1) / 2) : 0; // -1 .. 1 across the line
+      var ty = 0, tx = 0;
+      if (reduce){ /* opacity only */ }
+      else if (B.fx === "join"){ tx = c * (1 - ei) * cw * 0.06; }
+      else {
+        ty = (1 - ei) * 105;
+        if (B.fx === "part") tx = c * l * cw * 0.09;
+      }
+      B.words[i].style.transform = "translate3d(0," + ty.toFixed(2) + "%,0)";
+      B.masks[i].style.transform = "translate3d(" + tx.toFixed(1) + "px,0,0)";
+    }
+    var y = reduce ? 0 : (1 - e) * DRIFT - l * DRIFT;
+    var sc = (B.fx === "push" && !reduce) ? 1 + (1 - e) * 0.06 : 1;
+    B.bi.style.transform = "translate3d(0," + y.toFixed(2) + "px,0) scale(" + sc.toFixed(4) + ")";
+    var ks = reduce ? e : smooth(clamp((e - 0.35) / 0.65, 0, 1));
+    for (var r = 0; r < B.rest.length; r++){
+      B.rest[r].style.opacity = ks;
+      B.rest[r].style.transform = "translate3d(0," + ((1 - ks) * 12).toFixed(2) + "px,0)";
+    }
+  }
+
+  function paintBeats(pos){
+    for (var i = 0; i < beats.length; i++){
+      var B = beats[i];
+      var e = B.first ? introK : ramp(pos, B.a, B.a + R);
+      var l = B.last ? 0 : ramp(pos, B.b - R, B.b);
+      var o = e * (1 - l);
+      if (o === B.o && e === B.e && l === B.l) continue;
+      B.o = o; B.e = e; B.l = l;
+      B.el.style.opacity = o;
+      if (B.live) B.el.style.pointerEvents = o > 0.6 ? "auto" : "none";
+      if (o > 0 || e === 0) beatTransforms(B, e, l);
+    }
+  }
+
+  /* ---------- Callouts: dot pops, line draws, label lands ---------- */
+  function paintCallouts(pos){
+    for (var i = 0; i < callouts.length; i++){
+      var c = callouts[i], B = beats[c.beat];
+      var ce = ramp(pos, B.a + 8 + c.j * 10, B.a + 34 + c.j * 10);
+      if (reduce) ce = ce > 0 ? 1 : 0;
+      var fade = 1 - ramp(pos, B.b - R, B.b);
+      var p = mapPt(c.x, c.y), ax = p.x, ay = p.y;
+      var vis = ce > 0.001 && fade > 0.001 && ax > 10 && ax < cw - 10 && ay > topSafe && ay < ch - 50;
+      if (!vis){
+        if (c.on){ c.dot.style.opacity = 0; c.ln.style.opacity = 0; c.lab.style.opacity = 0; c.on = false; }
+        continue;
+      }
+      c.on = true;
+      var kd = smooth(clamp(ce * 3, 0, 1)), kl = smooth(clamp(ce * 2 - 0.35, 0, 1)), kt = smooth(clamp(ce * 2.2 - 1.2, 0, 1));
+      var dir = c.dir, L = c.L, lx, ly, tx, ty;
+      if (dir === "R" && ax + L + 8 + c.w > cw - 10) dir = "L";
+      else if (dir === "L" && ax - L - 8 - c.w < 10) dir = "R";
+      c.ln.style.transformOrigin = dir === "R" ? "0 50%" : dir === "L" ? "100% 50%" : dir === "D" ? "50% 0" : "50% 100%";
+      if (dir === "R"){ lx = ax; ly = ay; tx = ax + L + 8 - (1 - kt) * 10; ty = ay - c.h / 2; }
+      else if (dir === "L"){ lx = ax - L; ly = ay; tx = ax - L - 8 - c.w + (1 - kt) * 10; ty = ay - c.h / 2; }
+      else if (dir === "D"){ lx = ax; ly = ay; tx = clamp(ax - c.w / 2, 10, cw - c.w - 10); ty = ay + L + 8 - (1 - kt) * 8; }
+      else { lx = ax; ly = ay - L; tx = clamp(ax - c.w / 2, 10, cw - c.w - 10); ty = ay - L - 8 - c.h + (1 - kt) * 8; }
+      var horiz = dir === "R" || dir === "L";
+      c.ln.style.width = horiz ? L + "px" : "1px";
+      c.ln.style.height = horiz ? "1px" : L + "px";
+      c.ln.style.transform = "translate3d(" + lx.toFixed(1) + "px," + ly.toFixed(1) + "px,0) " + (horiz ? "scaleX(" : "scaleY(") + kl.toFixed(3) + ")";
+      c.ln.style.opacity = fade;
+      c.dot.style.transform = "translate3d(" + (ax - 4.5).toFixed(1) + "px," + (ay - 4.5).toFixed(1) + "px,0) scale(" + kd.toFixed(3) + ")";
+      c.dot.style.opacity = kd * fade;
+      c.lab.style.transform = "translate3d(" + tx.toFixed(1) + "px," + ty.toFixed(1) + "px,0)";
+      c.lab.style.opacity = kt * fade;
+    }
+  }
+
+  /* ---------- HUD ---------- */
+  var lastChapter = -1, cueOn = true;
+  function paintHud(pos){
+    var idx = 0;
+    for (var i = 0; i < CHAPTERS.length; i++) if (pos >= CHAPTERS[i][0]) idx = i;
+    if (idx !== lastChapter){
+      lastChapter = idx;
+      chapter.innerHTML = "<b>0" + (idx + 1) + "</b> / 0" + CHAPTERS.length + " &nbsp;" + CHAPTERS[idx][1];
+    }
+    var on = pos < 30;
+    if (on !== cueOn){ cueOn = on; cue.style.opacity = on ? 1 : 0; }
+  }
+
+  /* ---------- Scroll state ---------- */
+  var target = 0, shown = 0, ready = false;
+
+  function readScroll(){
+    var max = document.documentElement.scrollHeight - window.innerHeight;
+    target = (max > 0 ? clamp(window.pageYOffset / max, 0, 1) : 0) * TOTAL;
+  }
+
+  function render(){
+    sample(shown);
+    theme();
+    draw();
+    meter.style.transform = "scaleX(" + (shown / TOTAL).toFixed(4) + ")";
+    paintBeats(shown);
+    paintCallouts(shown);
+    paintHud(shown);
+  }
+
+  // One easing layer for the whole page: the scroll position itself is smoothed
+  // (frame-rate independent), and footage, copy and callouts are all derived from it.
+  var lastT = 0, introStart = 0;
+  function tick(now){
+    var dt = lastT ? Math.min(100, now - lastT) : 16.667; lastT = now;
+    if (ready){
+      var gap = target - shown;
+      if (Math.abs(gap) < 0.01 || reduce) shown = target;
+      else shown += gap * (1 - Math.pow(1 - 0.115, dt / 16.667));
+      introK = introStart ? (reduce ? 1 : clamp((now - introStart) / 1400, 0, 1)) : 0;
+    }
+    render();
+    requestAnimationFrame(tick);
+  }
+
+  /* ---------- Boot ---------- */
+  function setProgress(f){
+    bootBar.style.transform = "scaleX(" + f + ")";
+    bootPct.textContent = "LOADING " + Math.round(f * 100) + "%";
+  }
+
+  var started = false;
+  function start(){
+    if (started) return;
+    started = true; ready = true;
+    boot.classList.add("done");
+    readScroll(); shown = target;
+    introStart = performance.now() + 250;
+  }
+
+  // Preload every frame. Coarse frames first (every 32nd, then 16th, 8th …) so a fast
+  // scroll during loading still finds a nearby frame instead of a blank.
+  function preload(){
+    var order = [], seen = new Uint8Array(FRAME_COUNT), done = 0;
+    [32, 16, 8, 4, 2, 1].forEach(function(st){
+      for (var i = 0; i < FRAME_COUNT; i += st) if (!seen[i]){ seen[i] = 1; order.push(i); }
+    });
+    function settle(){
+      done++;
+      setProgress(done / FRAME_COUNT);
+      if (done === FRAME_COUNT) start();
+    }
+    order.forEach(function(i){
+      var img = new Image();
+      img.decoding = "async";
+      img.onload = function(){ loaded[i] = 1; if (i === 0) drawnKey = ""; settle(); };
+      img.onerror = settle;
+      img.src = frameSrc(i);
+      frames[i] = img;
+    });
+    setTimeout(start, 15000); // never strand the page behind the preloader
+  }
+
+  /* ---------- Nav jumps ---------- */
+  [].slice.call(document.querySelectorAll("[data-jump]")).forEach(function(a){
+    a.addEventListener("click", function(ev){
+      ev.preventDefault();
+      var name = a.getAttribute("data-jump");
+      var s = seg(name), pos = name === "end" ? TOTAL : (s.start + s.end) / 2;
+      var max = document.documentElement.scrollHeight - window.innerHeight;
+      window.scrollTo({ top: pos / TOTAL * max, behavior: reduce ? "auto" : "smooth" });
+    });
+  });
+
+  /* ---------- Wiring ---------- */
+  window.addEventListener("scroll", readScroll, { passive:true });
+  window.addEventListener("resize", function(){ layout(); readScroll(); drawnKey = ""; });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(layout); // label widths
+
+  layout();
+  readScroll();
+  render();
+  preload();
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
